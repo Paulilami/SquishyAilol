@@ -31,7 +31,7 @@ This repository provides Python scripts utilizing OpenAI's API for processing pa
 
 3. Set your OpenAI API key:
     ```bash
-    export OPENAI_API_KEY=""
+    export OPENAI_API_KEY="INSERT_KEY_HERE"
     ```
 
 ## Usage
