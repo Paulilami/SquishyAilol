@@ -20,18 +20,18 @@ This repository provides Python scripts utilizing OpenAI's API for processing pa
 
 1. Clone the repository:
     ```bash
-    git clone https://github.com/your-repository.git
-    cd your-repository
+    git clone https://github.com/squishyailol.git
+    cd squishyailol
     ```
 
 2. Install the required Python packages:
     ```bash
-    pip install openai
+    pip3 install openai
     ```
 
 3. Set your OpenAI API key:
     ```bash
-    export OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
+    export OPENAI_API_KEY=""
     ```
 
 ## Usage
