@@ -62,13 +62,13 @@ python3 ai_payments.py
     Create a dividend payment stream for my equity tokens with a quarterly payout of the sum that got paid into the payment stream contract.
     ```
 
-    ### Payment Streams
+    ### Token Vaults
 
-#### Script: `ai_payments.py`
+#### Script: `ai_vaults.py`
 
 Execute the script:
 ```bash
-python3 ai_payments.py
+python3 ai_vaults.py
 ```
 
 ## Testing Prompts
@@ -88,13 +88,13 @@ python3 ai_payments.py
     Configure a token vault for my real estate assets with a 24-month duration and a 5% early withdrawal penalty.
     ```
 
-    ### Payment Streams
+    ### TokenTool
 
-#### Script: `ai_payments.py`
+#### Script: `ai_tokentool.py`
 
 Execute the script:
 ```bash
-python3 ai_payments.py
+python3 ai_tokentool.py
 ```
 ## Testing Prompts
 
