@@ -2,115 +2,116 @@ import os
 from openai import OpenAI, APIConnectionError, APIError, APIStatusError
 import json
 import logging
+import re
 
 logging.basicConfig(level=logging.INFO, filename='token_vaults.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+PROTOCOL_FIELDS = {
+    "Asset Type": ["Equity Tokens", "Real Estate", "Watches", "Vehicles", "Not defined"],
+    "Access Control": ["All token owners", "Only admin", "Admin & Managers", "Whitelisted addresses", "Not defined"],
+    "Duration": ["Not defined"],  
+    "Penalty": ["Not defined"],  
+    "Input Payments": ["Yes", "No", "Not defined"],
+    "Input Payments Frequency": ["Daily", "Weekly", "Monthly", "Quarterly", "Half-yearly", "Yearly", "Not defined"],
+    "Input Payment Currency": ["EUR", "USD", "ETH", "Other", "Not defined"],
+    "Output Payment Distribution": ["Yes", "No", "Not defined"],
+    "Distribution Frequency": ["Daily", "Weekly", "Monthly", "Quarterly", "Half-yearly", "Yearly", "Not defined"],
+    "Distribute to": ["All token holders/owners", "Only whitelisted addresses", "Not defined"],
+    "Vault Description": ["No description"],
+    "Admin": ["Creator"],
+    "Managers": ["Whitelisted addresses", "Creator", "Not defined"],
+    "Manager Permissions": ["Input payments", "Change data", "Withdraw funds", "Delete payment stream", "Not defined"]
+}
+
 PROMPT_TEMPLATE = """
-You are an advanced AI assistant specialized in configuring digital token vaults. Your task is to extract, analyze, and accurately process detailed vault configurations based on the user's input. The user may describe various scenarios related to asset storage, duration, penalties, payment streams, and access control. You must interpret the context, ensure each data point corresponds to one of the predefined fields, and handle any ambiguity intelligently. Follow these steps carefully:
+You are an advanced AI assistant specialized in configuring digital token vaults. Your task is to extract, analyze, and process detailed vault configurations from the user's input. The user may describe various scenarios related to asset storage, duration, penalties, payment streams, and access control. You must interpret the context and determine the appropriate parameters for the vault configuration. When the user writes "my", "me", "I", "myself", etc, he means the (=) "Creator".
 
-1. **Contextual Analysis**: Understand the overall context of the vault. Determine whether the user is describing a vault for asset storage, a payment stream associated with the vault, or a combination of both. Recognize if the user mentions specific asset types, storage duration, penalties for early withdrawal, and access controls.
+Ensure that all data extracted corresponds to the predefined fields and options:
 
-2. **Core Elements Identification**: Identify and list the key elements of the vault, ensuring each is mapped to the following predefined fields:
+{protocol_fields}
 
-   - **Asset Type**: 
-     - Options: "Equity Tokens" (if the user writes "shares", "stocks", etc., select this), "Real Estate" (Property, etc.), "Watches", "Vehicles". 
-     - Default: "Not defined".
-   - **Access Control**: 
-     - Options: "All token owners", "Only admin" (select if user says "Myself" or "Creator"), "Admin & Managers" (if managers have access control, admin also has it), "Whitelisted addresses".
-     - Default: "Not defined".
-   - **Duration**: 
-     - Define the duration for which assets are to be stored.
-     - Range: "1 month" to "36 months".
-     - Default: "Not defined".
-   - **Penalty**: 
-     - Define the penalty percentage for early withdrawal.
-     - Range: "0.01%" to "10%".
-     - Default: "Not defined".
-   - **Input Payments**: 
-     - Identify if the vault requires input payments.
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-   - **Input Payments Frequency**: 
-     - Options: "Daily", "Weekly", "Monthly", "Quarterly", "Half-yearly", "Yearly".
-     - Default: "Not defined".
-   - **Input Payment Currency**: 
-     - Options: "EUR", "USD", "ETH", "Other".
-     - Default: "Not defined".
-   - **Output Payment Distribution**: 
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-   - **Distribution Frequency**: 
-     - Options: "Daily", "Weekly", "Monthly", "Quarterly", "Half-yearly", "Yearly".
-     - Default: "Not defined".
-   - **Distribute to**: 
-     - Options: "All token holders/owners", "Only whitelisted addresses".
-     - Default: "Not defined".
-   - **Vault Description**: 
-     - Options: "<description>", "No description".
-     - Default: "No description".
-   - **Admin**: 
-     - Always set this to "Creator".
-   - **Managers**: 
-     - Options: "Whitelisted addresses", "Not defined".
-     - Default: "Not defined".
-   - **Manager Permissions**: 
-     - Options: "Input payments", "Change data", "Withdraw funds", "Delete payment stream".
-     - Default: "Not defined".
+Current configuration:
+{current_config}
 
-3. **Field Verification**: Ensure that all extracted information strictly adheres to the available options for each field. If a user's input does not match any predefined option, map it to the closest valid option or use the default value.
+User's new input or requested changes:
+{user_input}
 
-4. **Ambiguity Handling**: If the user provides ambiguous information (e.g., "managers can control the vault"), ensure that the output reflects this by appropriately setting the "Access Control" and "Manager Permissions" fields.
-
-5. **JSON Output**: Compile the extracted and verified information into a structured JSON format, ensuring that all fields are included and correctly populated with either the extracted data or the default values.
-
-User Input: "{user_input}"
-
-Provide the final JSON-like output:
+Update the vault configuration based on the user's input. If a field is not mentioned or changed, keep its previous value from the current configuration. Provide ONLY ONE updated JSON-like output, strictly adhering to the predefined fields and options. Only include fields that have changed; for unchanged fields, do not include them in the output. Do not include any explanations or additional text, just the single, final JSON object with the changes:
 """
 
-def create_token_vault(user_input: str) -> str:
+def validate_config(config):
+    """Validate and correct the configuration based on protocol fields."""
+    for field, value in config.items():
+        if field == "Duration":
+            if value != "Not defined":
+                try:
+                    months = int(value.split()[0])
+                    if months < 1 or months > 36:
+                        config[field] = "Not defined"
+                except:
+                    config[field] = "Not defined"
+        elif field == "Penalty":
+            if value != "Not defined":
+                try:
+                    penalty = float(value[:-1])
+                    if penalty < 0.01 or penalty > 10:
+                        config[field] = "Not defined"
+                except:
+                    config[field] = "Not defined"
+        elif field in PROTOCOL_FIELDS:
+            if value not in PROTOCOL_FIELDS[field]:
+                config[field] = "Not defined"
+    return config
+
+def create_or_update_token_vault(user_input: str, current_config: dict) -> dict:
+    """Create or update the token vault configuration based on user input."""
     try:
+        messages = [
+            {"role": "system", "content": "You are a specialized AI assistant."},
+            {"role": "user", "content": PROMPT_TEMPLATE.format(
+                protocol_fields=json.dumps(PROTOCOL_FIELDS, indent=2),
+                current_config=json.dumps(current_config, indent=2),
+                user_input=user_input
+            )}
+        ]
+
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a specialized AI assistant."},
-                {"role": "user", "content": PROMPT_TEMPLATE.format(user_input=user_input)}
-            ]
+            messages=messages
         )
 
-        response_text = response.choices[0].message.content
+        response_text = response.choices[0].message.content.strip()
         
-        try:
-            response_json = json.loads(response_text)
-            response_pretty = json.dumps(response_json, indent=2)
-        except json.JSONDecodeError:
-            response_pretty = response_text
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            try:
+                updated_config = json.loads(json_str)
+                for key, value in updated_config.items():
+                    if value != "Not defined":
+                        current_config[key] = value
+                validated_config = validate_config(current_config)
+                logging.info(f"User Input: {user_input}")
+                logging.info(f"Updated Config: {json.dumps(validated_config, indent=2)}")
+                return validated_config
+            except json.JSONDecodeError:
+                logging.error(f"Failed to parse extracted JSON: {json_str}")
+        else:
+            logging.error(f"No valid JSON found in the response: {response_text}")
+        
+        return current_config
 
-        success_score = evaluate_interaction(user_input, response_pretty)
-        if success_score > 0.5:
-            store_interaction(user_input, response_pretty, success_score)
-
-        logging.info(f"User Input: {user_input}")
-        logging.info(f"AI Response: {response_pretty}")
-
-        return response_pretty
-
-    except APIConnectionError as e:
-        logging.error(f"API Connection Error: {e.__cause__}")
-        return '{"error": "API connection failed"}'
-    except APIStatusError as e:
-        logging.error(f"API Status Error: {e.status_code}, Response: {e.response}")
-        return '{"error": "API status error occurred"}'
-    except APIError as e:
-        logging.error(f"General API Error: {e}")
-        return '{"error": "API request failed"}'
+    except (APIConnectionError, APIStatusError, APIError) as e:
+        logging.error(f"API Error: {str(e)}")
+        return current_config
     except Exception as e:
-        logging.error(f"Unexpected Error: {e}")
-        return '{"error": "An unexpected error occurred"}'
+        logging.error(f"Unexpected Error: {str(e)}")
+        return current_config
 
-def evaluate_interaction(user_input: str, ai_response: str) -> float:
+def evaluate_interaction(user_input: str, config: dict) -> float:
+    """Evaluate the quality of the interaction."""
     if "adjust" in user_input.lower():
         return 0.4
     elif "no adjustment" in user_input.lower():
@@ -118,11 +119,12 @@ def evaluate_interaction(user_input: str, ai_response: str) -> float:
     else:
         return 0.7
 
-def store_interaction(user_input, ai_response, score):
+def store_interaction(user_input, config, score):
+    """Store the interaction for future fine-tuning."""
     interaction = {
         "messages": [
             {"role": "user", "content": user_input},
-            {"role": "assistant", "content": ai_response}
+            {"role": "assistant", "content": json.dumps(config)}
         ],
         "score": score
     }
@@ -130,6 +132,7 @@ def store_interaction(user_input, ai_response, score):
         f.write(json.dumps(interaction) + "\n")
 
 def fine_tune_model():
+    """Fine-tune the model using stored interactions."""
     with open("training_data_vaults.jsonl", "r") as f:
         interactions = [json.loads(line) for line in f]
 
@@ -149,7 +152,7 @@ def fine_tune_model():
         file=open("filtered_training_data_vaults.jsonl", "rb"),
         purpose="fine-tune"
     )
-    training_file_id = response['id']
+    training_file_id = response.id
 
     fine_tune_response = client.fine_tuning.jobs.create(
         training_file=training_file_id,
@@ -159,19 +162,55 @@ def fine_tune_model():
 
     logging.info(f"Fine-tuning job created: {fine_tune_response}")
 
-def handle_user_input():
-    user_input = input("Enter your token vault description (or 'quit' to exit): ")
-    if user_input.lower() == 'quit':
-        return None
+def handle_user_input(current_config, is_first_input):
+    """Handle user input and update the configuration accordingly."""
+    if is_first_input:
+        user_input = input("Enter your initial token vault description: ")
+    else:
+        user_input = input("Enter changes you want to make or 'done' to finish and 'quit' to stop: ")
 
-    return create_token_vault(user_input)
+    if user_input.lower() == 'done':
+        return None, True
+    elif user_input.lower() == 'quit':
+        return None, False
+
+    updated_config = create_or_update_token_vault(user_input, current_config)
+    success_score = evaluate_interaction(user_input, updated_config)
+    
+    if success_score > 0.5:
+        store_interaction(user_input, updated_config, success_score)
+
+    return updated_config, None
 
 if __name__ == '__main__':
-    while True:
-        result = handle_user_input()
-        if result is None:
-            break
-        print(result)
-        print("\nEnter another description or 'quit' to exit.")
+    current_config = {
+        "Asset Type": "Not defined",
+        "Access Control": "Not defined",
+        "Duration": "Not defined",
+        "Penalty": "Not defined",
+        "Input Payments": "Not defined",
+        "Input Payments Frequency": "Not defined",
+        "Input Payment Currency": "Not defined",
+        "Output Payment Distribution": "Not defined",
+        "Distribution Frequency": "Not defined",
+        "Distribute to": "Not defined",
+        "Vault Description": "No description",
+        "Admin": "Creator",
+        "Managers": "Not defined",
+        "Manager Permissions": "Not defined"
+    }
+    is_successful = None
+    is_first_input = True
 
-    fine_tune_model()
+    while is_successful is None:
+        result, is_successful = handle_user_input(current_config, is_first_input)
+        if result is not None:
+            current_config = result
+            print(json.dumps(current_config, indent=2))
+        is_first_input = False
+
+    if is_successful:
+        print("Generation was successful. Proceeding with fine-tuning.")
+        fine_tune_model()
+    else:
+        print("Process terminated. No data will be used for training or fine-tuning.")
