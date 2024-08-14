@@ -3,105 +3,94 @@ from openai import OpenAI, APIConnectionError, APIError, APIStatusError
 import json
 import logging
 
+# Set up logging
 logging.basicConfig(level=logging.INFO, filename='payment_streams.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
 
+# Initialize OpenAI client
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+PROTOCOL_FIELDS = {
+    "Asset Type": ["Equity Tokens", "Real Estate", "Watches", "Vehicles", "Not defined"],
+    "Payer": ["Creator", "Everyone", "Other address"],
+    "Input Payment Frequency": ["Daily", "Weekly", "Monthly", "Quarterly", "Half-yearly", "Yearly", "Not defined"],
+    "Input Payment Amount": ["Not defined"],  # handled separately
+    "Output Payment Distribution": ["Yes", "No", "Not defined"],
+    "Distribution Frequency": ["Daily", "Weekly", "Monthly", "Quarterly", "Half-yearly", "Yearly", "Not defined"],
+    "Distribute to": ["All token holders/owners", "Only whitelisted addresses", "Not defined"],
+    "Pause Payments": ["Yes", "No", "Not defined"],
+    "Pause Payments by": ["Creator/Myself", "Whitelisted addresses", "Not defined"],
+    "Admin": ["Creator"],
+    "Managers": ["Whitelisted addresses", "Creator" "Not defined"],
+    "Manager Permissions": ["Input payments", "Change data", "Withdraw funds", "Delete payment stream", "Not defined"]
+}
+
 PROMPT_TEMPLATE = """
-You are an advanced AI assistant specialized in financial payment streams. Your task is to extract, analyze, and process detailed payment stream configurations from the user's input. The user may describe a variety of financial use cases, including but not limited to dividend payments, subscriptions, rent, salaries, and other recurring or one-time payment structures. You must interpret the financial context and determine the appropriate parameters for the payment stream. Ensure that all data extracted corresponds to the predefined fields. Follow these steps carefully:
+You are an advanced AI assistant specialized in financial payment streams. Your task is to extract, analyze, and process detailed payment stream configurations from the user's input. The user may describe a variety of financial use cases, including but not limited to dividend payments, subscriptions, rent, salaries, and other recurring or one-time payment structures. You must interpret the financial context and determine the appropriate parameters for the payment stream. When the user writes "my", "me", "I", "myself", etc, he means the (=) "Creator". Meaning user = "Creator", do not write "User".
 
-1. **Contextual Analysis**: Understand the overall financial context, such as whether the payment is related to dividends, subscriptions, salaries, rent, or another financial mechanism. Identify whether the payment stream involves input payments (money flowing into the system) or output payments (distributions to recipients).
+Imprtant info: Please always think about the context of the prompt, for example, when the user writes he wants a dividend payment, he for sure has an output payment in a not determined frequency and an input payment which can be made at any time etc. think about what payment stream types result in what outcome and think logically to provide the right data output.
 
-2. **Core Elements Identification and Update**: Identify and list the key elements of the payment stream, and ensure each is mapped to the following predefined fields. Update the existing configuration based on the new input. Identify the following fields:
+Ensure that all data extracted corresponds to the predefined fields and options:
 
-    - **Asset Type**: 
-     - Options: "Equity Tokens" (if the user writes "shares", "stocks", etc., select this), "Real Estate" (Property, etc.), "Watches", "Vehicles". 
-     - Default: "Not defined".
-   - **Payer**: 
-     - Options: "Creator" (if the user writes "myself", select this), "Everyone", "Other address". 
-     - Default: "Creator".
-   - **Input Payment Frequency**: 
-     - Options: "Daily", "Weekly", "Monthly", "Quarterly", "Half-yearly", "Yearly". 
-     - Default: "Not defined".
-   - **Input Payment Amount**: 
-     - Options: Amount in "ETH", Amount in "EUR", or "Not defined". 
-     - Default: "Not defined".
-   - **Output Payment Distribution**: 
-     - Options: "Yes", "No". 
-     - Default: "Not defined".
-   - **Distribution Frequency**: 
-     - Options: "Daily", "Weekly", "Monthly", "Quarterly", "Half-yearly", "Yearly". 
-     - Default: "Not defined".
-   - **Distribute to**: 
-     - Options: "All token holders/owners", "Only whitelisted addresses". 
-     - Default: "Not defined".
-   - **Pause Payments**: 
-     - Options: "Yes", "No". 
-     - Default: "Not defined".
-   - **Pause Payments by**: 
-     - Options: "Creator/Myself", "Whitelisted addresses". 
-     - Default: "Not defined".
-   - **Admin**: 
-     - Always set to "Creator".
-   - **Managers**: 
-     - Options: "Whitelisted addresses" or "Not defined". 
-     - Default: "Not defined".
-   - **Manager Permissions**: 
-     - Options: "Input payments", "Change data", "Withdraw funds", "Delete payment stream". 
-     - Default: "Not defined".
+{protocol_fields}
 
-3. **Field Verification**: Ensure that all extracted information strictly adheres to the available options for each field. If a user's input does not match any predefined option, map it to the closest valid option or use the default value.
+User's new input or requested changes:
+{user_input}
 
-4. **JSON Output**: Compile the extracted and verified information into a structured JSON format, ensuring that all fields are included and correctly populated with either the extracted data or the default values.
-
-User Input: "{user_input}"
-
-Existing Configuration (if any): {existing_data}
-
-Provide the updated JSON-like output:
+Update the payment stream configuration based on the user's input. If a field is not mentioned or changed, keep its previous value. Provide ONLY ONE updated JSON-like output, strictly adhering to the predefined fields and options. Do not include any explanations or additional text, just the single, final JSON object:
 """
 
-def create_payment_stream(user_input: str) -> str:
+def validate_config(config):
+    """Validate and correct the configuration based on protocol fields."""
+    for field, value in config.items():
+        if field == "Input Payment Amount":
+            if value != "Not defined" and not (value.startswith("ETH ") or value.startswith("EUR ")):
+                config[field] = "Not defined"
+        elif field in PROTOCOL_FIELDS:
+            if value not in PROTOCOL_FIELDS[field]:
+                config[field] = "Not defined"
+    return config
+
+def create_or_update_payment_stream(user_input: str, current_config: dict) -> dict:
     try:
+        client = OpenAI()
+        
+        prompt = f"""
+Given the current configuration:
+{json.dumps(current_config, indent=2)}
+
+And the user input:
+"{user_input}"
+
+Update the configuration based on the user input. Provide ONLY the updated JSON configuration as your response, with no additional text:
+"""
+
+        messages = [
+            {"role": "system", "content": "You are a specialized AI assistant for updating payment stream configurations."},
+            {"role": "user", "content": prompt}
+        ]
+
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a specialized AI assistant."},
-                {"role": "user", "content": PROMPT_TEMPLATE.format(user_input=user_input)}
-            ]
+            messages=messages
         )
 
-        response_text = response.choices[0].message.content
+        response_text = response.choices[0].message.content.strip()
         
         try:
-            response_json = json.loads(response_text)
-            response_pretty = json.dumps(response_json, indent=2)
+            updated_config = json.loads(response_text)
+            return updated_config
         except json.JSONDecodeError:
-            response_pretty = response_text
+            print("Failed to update configuration. Keeping current configuration.")
+            return current_config
 
-        success_score = evaluate_interaction(user_input, response_pretty)
-        if success_score > 0.5:
-            store_interaction(user_input, response_pretty, success_score)
-
-        logging.info(f"User Input: {user_input}")
-        logging.info(f"AI Response: {response_pretty}")
-
-        return response_pretty
-
-    except APIConnectionError as e:
-        logging.error(f"API Connection Error: {e.__cause__}")
-        return '{"error": "API connection failed"}'
-    except APIStatusError as e:
-        logging.error(f"API Status Error: {e.status_code}, Response: {e.response}")
-        return '{"error": "API status error occurred"}'
-    except APIError as e:
-        logging.error(f"General API Error: {e}")
-        return '{"error": "API request failed"}'
     except Exception as e:
-        logging.error(f"Unexpected Error: {e}")
-        return '{"error": "An unexpected error occurred"}'
+        print(f"An error occurred: {str(e)}")
+        return current_config
 
-def evaluate_interaction(user_input: str, ai_response: str) -> float:
+
+
+def evaluate_interaction(user_input: str, config: dict) -> float:
+    """Evaluate the quality of the interaction."""
     if "adjust" in user_input.lower():
         return 0.4
     elif "no adjustment" in user_input.lower():
@@ -109,11 +98,12 @@ def evaluate_interaction(user_input: str, ai_response: str) -> float:
     else:
         return 0.7
 
-def store_interaction(user_input, ai_response, score):
+def store_interaction(user_input, config, score):
+    """Store the interaction for future fine-tuning."""
     interaction = {
         "messages": [
             {"role": "user", "content": user_input},
-            {"role": "assistant", "content": ai_response}
+            {"role": "assistant", "content": json.dumps(config)}
         ],
         "score": score
     }
@@ -121,6 +111,7 @@ def store_interaction(user_input, ai_response, score):
         f.write(json.dumps(interaction) + "\n")
 
 def fine_tune_model():
+    """Fine-tune the model using stored interactions."""
     with open("training_data_streams.jsonl", "r") as f:
         interactions = [json.loads(line) for line in f]
 
@@ -140,7 +131,7 @@ def fine_tune_model():
         file=open("filtered_training_data_streams.jsonl", "rb"),
         purpose="fine-tune"
     )
-    training_file_id = response['id']
+    training_file_id = response.id
 
     fine_tune_response = client.fine_tuning.jobs.create(
         training_file=training_file_id,
@@ -150,19 +141,53 @@ def fine_tune_model():
 
     logging.info(f"Fine-tuning job created: {fine_tune_response}")
 
-def handle_user_input():
-    user_input = input("Enter your payment stream description (or 'quit' to exit): ")
-    if user_input.lower() == 'quit':
-        return None
+def handle_user_input(current_config, is_first_input):
+    """Handle user input and update the configuration accordingly."""
+    if is_first_input:
+        user_input = input("Enter your initial payment stream description: ")
+    else:
+        user_input = input("Enter changes you want to make or 'done' to finish and 'quit' to stop: ")
 
-    return create_payment_stream(user_input)
+    if user_input.lower() == 'done':
+        return None, True
+    elif user_input.lower() == 'quit':
+        return None, False
+
+    updated_config = create_or_update_payment_stream(user_input, current_config)
+    success_score = evaluate_interaction(user_input, updated_config)
+    
+    if success_score > 0.5:
+        store_interaction(user_input, updated_config, success_score)
+
+    return updated_config, None
 
 if __name__ == '__main__':
-    while True:
-        result = handle_user_input()
-        if result is None:
-            break
-        print(result)
-        print("\nEnter another description or 'quit' to exit.")
+    current_config = {
+        "Asset Type": "Not defined",
+        "Payer": "Creator",
+        "Input Payment Frequency": "Not defined",
+        "Input Payment Amount": "Not defined",
+        "Output Payment Distribution": "Not defined",
+        "Distribution Frequency": "Not defined",
+        "Distribute to": "Not defined",
+        "Pause Payments": "Not defined",
+        "Pause Payments by": "Not defined",
+        "Admin": "Creator",
+        "Managers": "Not defined",
+        "Manager Permissions": "Not defined"
+    }
 
-    fine_tune_model()
+    while True:
+        user_input = input("Enter changes you want to make (or 'done' to finish): ")
+        
+        if user_input.lower() == 'done':
+            break
+        
+        updated_config = create_or_update_payment_stream(user_input, current_config)
+        
+        print(json.dumps(updated_config, indent=2))
+        
+        current_config = updated_config
+
+    print("\nFinal Configuration:")
+    print(json.dumps(current_config, indent=2))
