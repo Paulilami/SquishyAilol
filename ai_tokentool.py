@@ -30,9 +30,12 @@ You are an advanced AI assistant specializing in extracting and configuring deta
    - **Description**: 
      - Extract any description provided for the token.
      - Default: "No description".
-   - **Documents**: 
-     - See if user wants to link any document(s) to their tokens / contract and find the URL(s) of any document(s).
+   - **UnifiedDocuments**: 
+     - See if user wants to link any document(s) to all of their tokens and find the URL(s) of these document(s). Documents which are linked to only a specific number of tokens will not be shown here, only documents connected to all tokens.
      - Default: "No documents".
+     - Ecample: If the user writes "Link all of my tokens to an plan document, and link 100 tokens of them to a special investment contract document with the url...", then we only show the plan document within the UnifiedDocument section. The special investment contract NOT.
+     - Important note: We will only show documents here which are connected to ALL tokens. If the user wants to link data to a specific number of tokens, this data / documents are stored within the linkedmetadata datapoints. 
+     - Structure: For every document or data (textfield, etc.) we have the following JSON Structure: "Name" (name of the document), and "url"(URL of the document")
    - **CanMint**: 
      - Identify if new tokens can be minted by token owners.
      - Options: "Yes", "No".
@@ -42,7 +45,7 @@ You are an advanced AI assistant specializing in extracting and configuring deta
      - Range: Must be below 1 million and above the initial number of tokens.
      - Default: "Not defined".
    - **LinkedMetadataTrue**: 
-     - Identify if the user wants to link specific documents or data to a certain number of tokens. (For example: The user wants to link 10 out of 100 tokens to a special document.
+     - Identify if the user wants to link specific documents or data to a certain number of tokens. (For example: The user wants to link 10 out of 100 tokens to a special document. These documents / datapoints are not connected to all tokens. Only to the linked metadata tokens.
      - Improtant information: Linkedmetadata is data which is linked only to a specific number of tokens, not all tokens like a normal linked document, adding unique value or rights to these tokens. 
      - Key-words: If user write "preference shares/stocks", or unique shares, he means the linkedmetadata. "Unique stocks /shares / tokens". "Only some tokens with data".
      - Options: "Yes", "No".
@@ -54,10 +57,12 @@ You are an advanced AI assistant specializing in extracting and configuring deta
      - Default: "Not defined".
    - **LinkedMetadata**: 
      - Determine the type of data to be linked (e.g., "Document", "Textfield") to the specific number of tokens of linkedmetadata.
+     - Options: "Document", "Text Field", "Link".
      - Default: "Not defined".
    - **LinkedMetadata Datapoint**: 
      - Extract the specific data to be linked, such as a URL or text description for the specific tokens of linkedmetadata.
      - Default: "Not defined".
+     - Structure: For every document or data (textfield, etc.) we have the following JSON Structure: "Name" (name of the document), and "url"(URL of the document")
    - **PreferenceSignature**: 
      - Identify if the user wants to include a verifiable signature in the specific number of tokens of linked metadata (for example, "15 out of 100 tokens", adding preference rights to that token.
      -Important notes: The user can also say that he wants a verifiable signature / verfication "thing" in some of his tokens metadata 
@@ -202,19 +207,24 @@ def fine_tune_model():
         for interaction in high_quality_interactions:
             f.write(json.dumps(interaction) + "\n")
 
-    response = client.files.create(
-        file=open("filtered_training_data.jsonl", "rb"),
-        purpose="fine-tune"
-    )
-    training_file_id = response['id']
+    try:
+        with open("filtered_training_data.jsonl", "rb") as file:
+            response = client.files.create(
+                file=file,
+                purpose="fine-tune"
+            )
+        
+        training_file_id = response.id 
 
-    fine_tune_response = client.fine_tuning.jobs.create(
-        training_file=training_file_id,
-        model="gpt-3.5-turbo",
-        hyperparameters={"n_epochs": 3}
-    )
+        fine_tune_response = client.fine_tuning.jobs.create(
+            training_file=training_file_id,
+            model="gpt-3.5-turbo"
+        )
 
-    logging.info(f"Fine-tuning job created: {fine_tune_response}")
+        logging.info(f"Fine-tuning job created: {fine_tune_response}")
+    except Exception as e:
+        logging.error(f"Error in fine-tuning process: {str(e)}")
+
 
 def handle_user_input():
     user_input = input("Enter your token creation configuration (or 'quit' to exit): ")
