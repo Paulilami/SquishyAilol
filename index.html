@@ -3,19 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Tokenization Platform</title>
+    <title>AI Tokenization Chat</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div id="app">
-        <h1>AI Tokenization Platform</h1>
-        <div id="chat-container">
-            <div id="chat-output"></div>
-            <input type="text" id="user-input" placeholder="Enter your task description here...">
-            <button id="send-btn">Send</button>
-            <button id="stop-btn">Stop</button>
-        </div>
+    <div class="chat-container">
+        <div id="chat-messages" class="chat-messages"></div>
+        <form id="chat-form" class="chat-form">
+            <input type="text" id="user-input" placeholder="Enter your request..." required>
+            <button type="submit">Send</button>
+        </form>
+        <button id="stop-button" class="stop-button">Stop</button>
     </div>
-    <script src="app.js"></script>
+    <script src="script.js"></script>
 </body>
 </html>
