@@ -32,9 +32,6 @@ Ensure that all data extracted corresponds to the predefined fields and options:
 
 {protocol_fields}
 
-Current configuration:
-{current_config}
-
 User's new input or requested changes:
 {user_input}
 
