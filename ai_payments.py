@@ -3,10 +3,8 @@ from openai import OpenAI, APIConnectionError, APIError, APIStatusError
 import json
 import logging
 
-# Set up logging
 logging.basicConfig(level=logging.INFO, filename='payment_streams.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
 
-# Initialize OpenAI client
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 PROTOCOL_FIELDS = {
