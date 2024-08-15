@@ -1,178 +1,146 @@
 import os
+from openai import OpenAI, APIConnectionError, APIError, APIStatusError
 import json
 import logging
-from openai import OpenAI, APIConnectionError, APIError, APIStatusError
 
 logging.basicConfig(level=logging.INFO, filename='token_tool.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-PROMPT_TEMPLATE = """
-You are an advanced AI assistant specializing in extracting and configuring detailed token creation parameters. The user will describe the token they wish to create, and you must extract all relevant information, ensuring each detail is correctly mapped to the predefined fields. Given the complexity of token creation, including customizable compliance features, ensure to handle all aspects of the configuration with precision. Follow these steps:
+PROTOCOL_FIELDS = {
+    "Token Name": ["Not defined"],
+    "Token Symbol": ["Not defined"],
+    "Number of Tokens": ["Not defined"],
+    "Asset Type": ["Equity Tokens", "Debt Tokens", "Real Estate", "Pokemon Cards", "Commodities", "Watches", "Vehicles", "Not defined"],
+    "Description": ["No description"],
+    "UnifiedData": ["True", "False"],
+    "UnifiedDataIndex": ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
+    "UnifiedDataType": ["Document", "Text Field", "Link", "Not provided"],
+    "UnifiedDataName": ["Not defined"],
+    "UnifiedDataPoint": ["Not defined"],
+    "CanMint": ["True", "False"],
+    "MaxCap": ["Not defined"],
+    "LinkedData": ["True", "False"],
+    "LinkedDataIndex": ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
+    "LinkedDataType": ["Document", "Text Field", "Link", "Not provided"],
+    "NumberofLinkedDataTokens": "Not defined",
+    "LinkedDataName": ["Not defined"],
+    "LinkedDataPoint": ["Not defined"],
+    "PreferenceSignature": ["True", "False"],
+    "PauseTokens": ["True", "False"],
+    "ForceTransfer": ["True", "False"],
+    "Freeze": ["True", "False"],
+    "Blacklist": ["True", "False"],
+    "TokenFee": ["True", "False"],
+    "FeeEarnedBy": ["Creator", "Wallet Address", "Not defined"],
+    "Whitelist": ["True", "False"],
+    "Whitelist Admin": ["Creator", "Wallet Address", "Not defined"],
+    "TokenOwner": ["Creator", "Wallet Address", "Not defined"]
+}
 
-1. **Contextual Analysis**: Understand the user's requirements based on the context provided. Identify key aspects of the token creation process, such as the token's purpose (e.g., governance, utility, security), the need for compliance features like force transfer or freezing, and any special requirements for whitelisting, blacklisting, or transaction fees.
+def sanitize_output(config):
+    """Ensure that the output configuration strictly adheres to the predefined format."""
+    sanitized_config = {}
+    for key in PROTOCOL_FIELDS:
+        if key in config:
+            if isinstance(PROTOCOL_FIELDS[key][0], list): 
+                sanitized_config[key] = config.get(key, [])
+            else:
+                sanitized_config[key] = config.get(key, PROTOCOL_FIELDS[key][0])
+        else:
+            sanitized_config[key] = PROTOCOL_FIELDS[key][0]
+    return sanitized_config
 
-2. **Core Elements Identification**: Extract and map the relevant details to the following predefined fields:
+def update_unified_data(user_input: str, current_config: dict):
+    """Update Unified Data by adding a new document to the configuration."""
+    unified_data_indices = current_config.get("UnifiedDataIndex", [])
+    unified_data_types = current_config.get("UnifiedDataType", [])
+    unified_data_names = current_config.get("UnifiedDataName", [])
+    unified_data_points = current_config.get("UnifiedDataPoint", [])
 
-   - **Token Name**: 
-     - Extract the name of the token.
-     - Default: "Not defined".
-   - **Token Symbol**: 
-     - Extract the symbol of the token.
-     - Default: "Not defined".
-   - **Number of Tokens**: 
-     - Extract the total number of tokens to be created.
-     - Range: 1 to 1,000,000.
-     - Default: "Not defined".
-   - **Asset Type**: 
-     - Options: "Equity Tokens" (if the user writes "shares", "stocks", etc., select this), "Real Estate" (Property, etc.), "Watches", "Vehicles". 
-     - Default: "Not defined".
-   - **Description**: 
-     - Extract any description provided for the token.
-     - Default: "No description".
-   - **UnifiedDocuments**: 
-     - See if user wants to link any document(s) to all of their tokens and find the URL(s) of these document(s). Documents which are linked to only a specific number of tokens will not be shown here, only documents connected to all tokens.
-     - Default: "No documents".
-     - Ecample: If the user writes "Link all of my tokens to an plan document, and link 100 tokens of them to a special investment contract document with the url...", then we only show the plan document within the UnifiedDocument section. The special investment contract NOT.
-     - Important note: We will only show documents here which are connected to ALL tokens. If the user wants to link data to a specific number of tokens, this data / documents are stored within the linkedmetadata datapoints. 
-     - Structure: For every document or data (textfield, etc.) we have the following JSON Structure: "Name" (name of the document), and "url"(URL of the document")
-   - **CanMint**: 
-     - Identify if new tokens can be minted by token owners.
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-   - **MaxCap**: 
-     - If minting (CanMint) is allowed, extract the maximum cap for the total number of tokens.
-     - Range: Must be below 1 million and above the initial number of tokens.
-     - Default: "Not defined".
-   - **LinkedMetadataTrue**: 
-     - Identify if the user wants to link specific documents or data to a certain number of tokens. (For example: The user wants to link 10 out of 100 tokens to a special document. These documents / datapoints are not connected to all tokens. Only to the linked metadata tokens.
-     - Improtant information: Linkedmetadata is data which is linked only to a specific number of tokens, not all tokens like a normal linked document, adding unique value or rights to these tokens. 
-     - Key-words: If user write "preference shares/stocks", or unique shares, he means the linkedmetadata. "Unique stocks /shares / tokens". "Only some tokens with data".
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-     -Example: User has a total of 100 tokens: "I want 15 tokens linked to a special investment contract", resulting in 15 linkedmetadata tokens out of his 100 total tokens.
-   - **Number of Linked Metadata Tokens**: 
-     - Determine how many tokens will be linked to the specific data.
-     - Range: Must be between 1 and the total number of tokens.
-     - Default: "Not defined".
-   - **LinkedMetadata**: 
-     - Determine the type of data to be linked (e.g., "Document", "Textfield") to the specific number of tokens of linkedmetadata.
-     - Options: "Document", "Text Field", "Link".
-     - Default: "Not defined".
-   - **LinkedMetadata Datapoint**: 
-     - Extract the specific data to be linked, such as a URL or text description for the specific tokens of linkedmetadata.
-     - Default: "Not defined".
-     - Structure: For every document or data (textfield, etc.) we have the following JSON Structure: "Name" (name of the document), and "url"(URL of the document")
-   - **PreferenceSignature**: 
-     - Identify if the user wants to include a verifiable signature in the specific number of tokens of linked metadata (for example, "15 out of 100 tokens", adding preference rights to that token.
-     -Important notes: The user can also say that he wants a verifiable signature / verfication "thing" in some of his tokens metadata 
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-     -Key words: "Preference rights", "verifiable rights", "special / unique rights", etc.
-   - **PauseTokens**: 
-     - Determine if token owners can pause their tokens.
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-   - **ForceTransfer**: 
-     - Determine if an authority address can force transfer tokens in emergency cases, adding customizable compliace.
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-     -Key words: "Customizable compliance", "Access lost", "Extra Security", "Integrated compliance", etc. 
-   - **Freeze**: 
-     - Similar to force transfer, but for freezing tokens to enforce compliance.
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-   - **Blacklist**: 
-     - Identify if specific addresses should be prevented from interacting with the tokens.
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-     - Key words: "Wallets that should not interact with the / my tokens..", "Blacklisted addresses", "Not able to interact with the / my / our tokens", etc.
-   - **TokenFee**: 
-     - Determine if a fee is associated with token transactions which is earned by the creator or another wallet address every time someone transacts the tokens, adding a pasisve income stream.
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-     - Key words: "Passive income", "Transaction Fee", "Fee for transactions", "earining income with transactions", etc.
-   - **FeeInEth**: 
-     - Extract the fee amount if a fee is applied.
-     - Range: 0.00021 ETH to 0.0033 ETH.
-     - Default: "Not defined".
-   - **FeeEarnedBy**: 
-     - Determine who earns the fee: "Creator" or "WalletAddress".
-     - Default: "Not defined".
-   - **Whitelist**: 
-     - Determine if only whitelisted addresses can interact with the tokens, creating a private market. Only addresses on the whitelist can interact with teh tokens.
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-     - Key words: "Whitelist", "Private market", "Private transactions", "Exclusive transactions", "Only accessible to...", etc.
-   - **Whitelist Admin**: 
-     - Identify who controls the whitelist: "Creator" or "WalletAddress".
-     - Default: "Not defined".
-   - **Whitelisted Addresses**: 
-     - Extract the list of wallet addresses that are allowed to interact with the tokens.
-     - Default: "Not defined".
-   - **Token Owner**: 
-     - Determine who will receive the tokens after minting: "Creator" or "Not defined".
-   - **Change Owner**: 
-     - Determine if the owner of the tokens should be someone else than the creator.
-     - Options: "Yes", "No".
-     - Default: "Not defined".
-   - **NewTokenOwner**: 
-     - If the owner is someone else, extract the new owner's wallet address.
-     - Default: "Not defined".
+    if not isinstance(unified_data_indices, list):
+        unified_data_indices = [unified_data_indices]
+    if not isinstance(unified_data_types, list):
+        unified_data_types = [unified_data_types]
+    if not isinstance(unified_data_names, list):
+        unified_data_names = [unified_data_names]
+    if not isinstance(unified_data_points, list):
+        unified_data_points = [unified_data_points]
 
-3. **Field Verification**: Ensure that all extracted information strictly adheres to the available options for each field. If the user input does not match any predefined option, map it to the closest valid option or use the default value.
+    current_index = len(unified_data_indices) + 1 
 
-4. **Ambiguity Handling**: If the user provides ambiguous or conflicting information (e.g., says he wants no compliance integrated but wants to freeze the tookens), resolve this by interpreting the context and prioritizing the newest information, in this case, we would simply allow the tokens to be freezed as the user said it and keep the rest the same.
+    doc_name, doc_url = extract_document_info(user_input)
 
-5. **JSON Output**: Compile the extracted and verified information into a structured JSON format, ensuring that all fields are included and correctly populated with either the extracted data or the default values.
+    current_config["UnifiedData"] = "True"
+    current_config["UnifiedDataIndex"] = unified_data_indices + [str(current_index)]
+    current_config["UnifiedDataType"] = unified_data_types + ["Document"]
+    current_config["UnifiedDataName"] = unified_data_names + [doc_name]
+    current_config["UnifiedDataPoint"] = unified_data_points + [doc_url]
 
-User Input: "{user_input}"
+    return current_config
 
-Provide the final JSON-like output:
+def extract_document_info(user_input: str):
+    """Extract document name and URL from user input."""
+    if "room plans" in user_input.lower():
+        return "Room Plans", "https://www.example.urls/to/insert"
+    elif "investment contract" in user_input.lower():
+        return "Investment Contract", "https://www.example.urls/to/insert/two"
+    elif "legal rights" in user_input.lower():
+        return "Legal Rights", "https://example.com/rights"
+    else:
+        return "Undefined Document", "https://undefined.url"
+
+def create_or_update_token_config(user_input: str, current_config: dict) -> dict:
+    try:
+        if "linked to" in user_input.lower() and "all tokens" not in user_input.lower():
+            current_config["LinkedData"] = "True"
+        else:
+            current_config = update_unified_data(user_input, current_config)
+
+        if "integrated compliance" in user_input.lower():
+            current_config["PauseTokens"] = "True"
+            current_config["ForceTransfer"] = "True"
+            current_config["Freeze"] = "True"
+            current_config["Blacklist"] = "True"
+
+        prompt = f"""
+Given the current configuration:
+{json.dumps(current_config, indent=2)}
+
+And the user input:
+"{user_input}"
+
+Update the configuration based on the user input. Provide ONLY the updated JSON configuration as your response, with no additional text:
 """
 
+        client = OpenAI()
 
-def create_token_tool_config(user_input: str) -> str:
-    try:
+        messages = [
+            {"role": "system", "content": "You are a specialized AI assistant for updating token configurations."},
+            {"role": "user", "content": prompt}
+        ]
+
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a specialized AI assistant."},
-                {"role": "user", "content": PROMPT_TEMPLATE.format(user_input=user_input)}
-            ]
+            model="gpt-4o-mini",
+            messages=messages
         )
 
-        response_text = response.choices[0].message.content
+        response_text = response.choices[0].message.content.strip()
 
         try:
-            response_json = json.loads(response_text)
-            response_pretty = json.dumps(response_json, indent=2)
+            updated_config = json.loads(response_text)
+            updated_config = sanitize_output(updated_config)
+            return updated_config
         except json.JSONDecodeError:
-            response_pretty = response_text
+            print("Failed to update configuration. Keeping current configuration.")
+            return current_config
 
-        success_score = evaluate_interaction(user_input, response_pretty)
-        if success_score > 0.5:
-            store_interaction(user_input, response_pretty, success_score)
-
-        logging.info(f"User Input: {user_input}")
-        logging.info(f"AI Response: {response_pretty}")
-
-        return response_pretty
-
-    except APIConnectionError as e:
-        logging.error(f"API Connection Error: {e.__cause__}")
-        return '{"error": "API connection failed"}'
-    except APIStatusError as e:
-        logging.error(f"API Status Error: {e.status_code}, Response: {e.response}")
-        return '{"error": "API status error occurred"}'
-    except APIError as e:
-        logging.error(f"General API Error: {e}")
-        return '{"error": "API request failed"}'
     except Exception as e:
-        logging.error(f"Unexpected Error: {e}")
-        return '{"error": "An unexpected error occurred"}'
+        print(f"An error occurred: {str(e)}")
+        return current_config
 
-def evaluate_interaction(user_input: str, ai_response: str) -> float:
+def evaluate_interaction(user_input: str, config: dict) -> float:
+    """Evaluate the quality of the interaction."""
     if "adjust" in user_input.lower():
         return 0.4
     elif "no adjustment" in user_input.lower():
@@ -180,19 +148,21 @@ def evaluate_interaction(user_input: str, ai_response: str) -> float:
     else:
         return 0.7
 
-def store_interaction(user_input, ai_response, score):
+def store_interaction(user_input, config, score):
+    """Store the interaction for future fine-tuning."""
     interaction = {
         "messages": [
             {"role": "user", "content": user_input},
-            {"role": "assistant", "content": ai_response}
+            {"role": "assistant", "content": json.dumps(config)}
         ],
         "score": score
     }
-    with open("training_data.jsonl", "a") as f:
+    with open("training_data_token_tool.jsonl", "a") as f:
         f.write(json.dumps(interaction) + "\n")
 
 def fine_tune_model():
-    with open("training_data.jsonl", "r") as f:
+    """Fine-tune the model using stored interactions."""
+    with open("training_data_token_tool.jsonl", "r") as f:
         interactions = [json.loads(line) for line in f]
 
     high_quality_interactions = [
@@ -203,42 +173,73 @@ def fine_tune_model():
         logging.info("Not enough high-quality data for fine-tuning.")
         return
 
-    with open("filtered_training_data.jsonl", "w") as f:
+    with open("filtered_training_data_token_tool.jsonl", "w") as f:
         for interaction in high_quality_interactions:
             f.write(json.dumps(interaction) + "\n")
 
-    try:
-        with open("filtered_training_data.jsonl", "rb") as file:
-            response = client.files.create(
-                file=file,
-                purpose="fine-tune"
-            )
-        
-        training_file_id = response.id 
+    response = client.files.create(
+        file=open("filtered_training_data_token_tool.jsonl", "rb"),
+        purpose="fine-tune"
+    )
+    training_file_id = response.id
 
-        fine_tune_response = client.fine_tuning.jobs.create(
-            training_file=training_file_id,
-            model="gpt-3.5-turbo"
-        )
+    fine_tune_response = client.fine_tuning.jobs.create(
+        training_file=training_file_id,
+        model="gpt-4o-mini",
+        hyperparameters={"n_epochs": 3}
+    )
 
-        logging.info(f"Fine-tuning job created: {fine_tune_response}")
-    except Exception as e:
-        logging.error(f"Error in fine-tuning process: {str(e)}")
+    logging.info(f"Fine-tuning job created: {fine_tune_response}")
 
+def handle_user_input(current_config):
+    """Handle user input and update the configuration accordingly."""
+    while True:
+        user_input = input("Enter changes you want to make (or 'done' to finish and 'quit' to stop): ")
 
-def handle_user_input():
-    user_input = input("Enter your token creation configuration (or 'quit' to exit): ")
-    if user_input.lower() == 'quit':
-        return None
+        if user_input.lower() == 'done':
+            break
+        elif user_input.lower() == 'quit':
+            return None, False
 
-    return create_token_tool_config(user_input)
+        updated_config = create_or_update_token_config(user_input, current_config)
+        print(json.dumps(updated_config, indent=2))
+        current_config = updated_config
+
+    return current_config, True
 
 if __name__ == '__main__':
-    while True:
-        result = handle_user_input()
-        if result is None:
-            break
-        print(result)
-        print("\nEnter another description or 'quit' to exit.")
+    current_config = {
+        "Token Name": "Not defined",
+        "Token Symbol": "Not defined",
+        "Number of Tokens": "Not defined",
+        "Asset Type": "Not defined",
+        "Description": "No description",
+        "UnifiedData": "False",
+        "UnifiedDataIndex": [],
+        "UnifiedDataType": [],
+        "UnifiedDataName": [],
+        "UnifiedDataPoint": [],
+        "CanMint": "False",
+        "MaxCap": "Not defined",
+        "LinkedData": "False",
+        "LinkedDataIndex": "1",
+        "LinkedDataType": "Not provided",
+        "NumberofLinkedDataTokens": "Not defined",
+        "LinkedDataName": "Not defined",
+        "LinkedDataPoint": "Not defined",
+        "PreferenceSignature": "False",
+        "PauseTokens": "False",
+        "ForceTransfer": "False",
+        "Freeze": "False",
+        "Blacklist": "False",
+        "TokenFee": "False",
+        "FeeEarnedBy": "Not defined",
+        "Whitelist": "False",
+        "Whitelist Admin": "Not defined",
+        "TokenOwner": "Creator"
+    }
 
-    fine_tune_model()
+    final_config, _ = handle_user_input(current_config)
+
+    print("\nFinal Configuration:")
+    print(json.dumps(final_config, indent=2))
